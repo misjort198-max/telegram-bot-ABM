@@ -121,16 +121,23 @@ def ruta_pdf(semana: int, asign_key: str) -> Path:
     base = ARCHIVOS_BASE.get(asign_key)
     if not base:
         return Path("")
+
+    # Si usas sufijo, probamos varias variantes (S/s y B/b) para Linux (case-sensitive)
     if USAR_SUFIJO:
         base_sin_ext = base[:-4] if base.lower().endswith(".pdf") else base
-        nombre_con_sufijo = f"{base_sin_ext}_{GRADO}{PARALELO}_S{semana}.pdf"
-        ruta_sufijo = carpeta / nombre_con_sufijo
-        if ruta_sufijo.exists():
-            return ruta_sufijo
-    return carpeta / base
 
-def etiqueta_grado_paralelo() -> str:
-    return f"{GRADO}º {PARALELO}"
+        candidatos = []
+        for letra in (PARALELO, PARALELO.upper(), PARALELO.lower()):
+            candidatos.append(f"{base_sin_ext}_{GRADO}{letra}_S{semana}.pdf")
+            candidatos.append(f"{base_sin_ext}_{GRADO}{letra}_s{semana}.pdf")
+
+        for nombre in candidatos:
+            ruta = carpeta / nombre
+            if ruta.exists():
+                return ruta
+
+    # fallback al nombre base sin sufijo
+    return carpeta / base
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HANDLERS
@@ -202,17 +209,18 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
 
     if WEBHOOK_URL:
-        print(f"🌐 Iniciando en modo WEBHOOK en {WEBHOOK_URL} (puerto {PORT})")
+        # Render detecta el puerto mejor si exponemos una ruta concreta
+        path = "webhook"
+        full_webhook = f"{WEBHOOK_URL.rstrip('/')}/{path}"
+        print(f"🌐 Iniciando en modo WEBHOOK en {full_webhook} (puerto {PORT})")
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path="",
-            webhook_url=WEBHOOK_URL,
+            url_path=path,            # ← ruta explícita
+            webhook_url=full_webhook, # ← URL pública + /webhook
             drop_pending_updates=True
         )
     else:
         print("📡 Iniciando en modo POLLING...")
         app.run_polling(drop_pending_updates=True)
 
-if __name__ == "__main__":
-    main()
