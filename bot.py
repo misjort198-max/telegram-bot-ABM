@@ -83,6 +83,9 @@ def texto_encabezado_semana(n_semana: int) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPERS DE UI
 # ──────────────────────────────────────────────────────────────────────────────
+def etiqueta_grado_paralelo() -> str:
+    return f"{GRADO}º {PARALELO}"
+
 def kb_menu_principal() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📚 Fichas Pedagógicas", callback_data="fichas")],
@@ -208,19 +211,19 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(on_button))
 
-    # DEBUG: ver qué llega de Render
+    # DEBUG opcional
     print(f"[DEBUG] WEBHOOK_URL env = {WEBHOOK_URL!r}")
     print(f"[DEBUG] PORT env = {PORT}")
 
     if WEBHOOK_URL:
-        path = "webhook"
+        path = "webhook"                               # ruta explícita
         full_webhook = f"{WEBHOOK_URL.rstrip('/')}/{path}"
         print(f"🌐 Iniciando en modo WEBHOOK en {full_webhook} (puerto {PORT})")
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path=path,              # ruta concreta
-            webhook_url=full_webhook,   # URL pública + /webhook
+            url_path=path,
+            webhook_url=full_webhook,
             drop_pending_updates=True
         )
     else:
@@ -229,4 +232,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
