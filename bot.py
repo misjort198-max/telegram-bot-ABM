@@ -83,6 +83,7 @@ def texto_encabezado_semana(n_semana: int) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPERS DE UI
 # ──────────────────────────────────────────────────────────────────────────────
+
 def etiqueta_grado_paralelo() -> str:
     return f"{GRADO}º {PARALELO}"
 
@@ -172,7 +173,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         semana = int(s)
         nombre_asign = ASIGNATURAS.get(asign_key, "Asignatura")
         rango = texto_rango_semana_solo_fecha(semana)
-        gp = etiqueta_grado_paralelo()
+        gp = f"{GRADO}º {PARALELO}"
         caption = f"📄 Ficha Pedagógica\nSemana {semana} · {nombre_asign}\n{rango}\nCurso: {gp}"
 
         pdf_path = ruta_pdf(semana, asign_key)
