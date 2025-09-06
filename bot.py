@@ -84,6 +84,12 @@ def texto_encabezado_semana(n_semana: int) -> str:
 # HELPERS DE UI
 # ──────────────────────────────────────────────────────────────────────────────
 
+def hay_pdf_disponible(semana: int, asign_key: str) -> bool:
+    """Devuelve True si existe un PDF para esa semana y asignatura (según tu lógica de sufijos/fallback)."""
+    p = ruta_pdf(semana, asign_key)
+    return bool(p) and p.exists()
+
+
 def etiqueta_grado_paralelo() -> str:
     return f"{GRADO}º {PARALELO}"
 
@@ -103,13 +109,17 @@ def kb_semanas() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def kb_asignaturas(semana: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(ASIGNATURAS["electricidad"], callback_data=f"ficha:{semana}:electricidad")],
-        [InlineKeyboardButton(ASIGNATURAS["tren"],          callback_data=f"ficha:{semana}:tren")],
-        [InlineKeyboardButton(ASIGNATURAS["sistemas"],      callback_data=f"ficha:{semana}:sistemas")],
-        [InlineKeyboardButton(ASIGNATURAS["motores"],       callback_data=f"ficha:{semana}:motores")],
-        [InlineKeyboardButton("🔙 Regresar a Selección de Semanas", callback_data="back:weeks")],
-    ])
+    filas = []
+    # Orden visible deseado:
+    orden = ["electricidad", "tren", "sistemas", "motores"]
+    for key in orden:
+        if hay_pdf_disponible(semana, key):
+            filas.append([InlineKeyboardButton(ASIGNATURAS[key], callback_data=f"ficha:{semana}:{key}")])
+
+    # Siempre agrega la opción para volver
+    filas.append([InlineKeyboardButton("🔙 Regresar a Selección de Semanas", callback_data="back:weeks")])
+    return InlineKeyboardMarkup(filas)
+
 
 def kb_volver_asignaturas(semana: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Regresar a Asignaturas", callback_data=f"back:subjects:{semana}")]])
