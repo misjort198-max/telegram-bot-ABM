@@ -209,18 +209,20 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
 
     if WEBHOOK_URL:
-        # Render detecta el puerto mejor si exponemos una ruta concreta
-        path = "webhook"
+        path = "webhook"                               # ← ruta explícita
         full_webhook = f"{WEBHOOK_URL.rstrip('/')}/{path}"
         print(f"🌐 Iniciando en modo WEBHOOK en {full_webhook} (puerto {PORT})")
         app.run_webhook(
             listen="0.0.0.0",
-            port=PORT,
-            url_path=path,            # ← ruta explícita
-            webhook_url=full_webhook, # ← URL pública + /webhook
+            port=PORT,                                 # ← Render define PORT
+            url_path=path,                             # ← ya NO vacío
+            webhook_url=full_webhook,                  # ← URL pública + /webhook
             drop_pending_updates=True
         )
     else:
         print("📡 Iniciando en modo POLLING...")
         app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
 
