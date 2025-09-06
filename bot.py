@@ -208,15 +208,19 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(on_button))
 
+    # DEBUG: ver qué llega de Render
+    print(f"[DEBUG] WEBHOOK_URL env = {WEBHOOK_URL!r}")
+    print(f"[DEBUG] PORT env = {PORT}")
+
     if WEBHOOK_URL:
-        path = "webhook"                               # ← ruta explícita
+        path = "webhook"
         full_webhook = f"{WEBHOOK_URL.rstrip('/')}/{path}"
         print(f"🌐 Iniciando en modo WEBHOOK en {full_webhook} (puerto {PORT})")
         app.run_webhook(
             listen="0.0.0.0",
-            port=PORT,                                 # ← Render define PORT
-            url_path=path,                             # ← ya NO vacío
-            webhook_url=full_webhook,                  # ← URL pública + /webhook
+            port=PORT,
+            url_path=path,              # ruta concreta
+            webhook_url=full_webhook,   # URL pública + /webhook
             drop_pending_updates=True
         )
     else:
