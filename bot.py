@@ -3,8 +3,9 @@
 from pathlib import Path
 from datetime import date, timedelta
 import os
+import asyncio  # ── NUEVO: para correr la llamada a OpenAI sin bloquear
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DESDE VARIABLES DE ENTORNO
@@ -15,6 +16,25 @@ PORT = int(os.getenv("PORT", "10000"))  # Render usa un puerto dinámico
 
 if not TOKEN:
     raise RuntimeError("Falta BOT_TOKEN en variables de entorno.")
+
+# ── GPT: Configuración de OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # puedes subir a gpt-4.1 si deseas
+if not OPENAI_API_KEY:
+    print("⚠️ Advertencia: Falta OPENAI_API_KEY. El modo Tutor no funcionará hasta que lo configures.")
+
+# ── GPT: Cliente OpenAI (SDK moderno)
+try:
+    from openai import OpenAI
+    _has_openai = True
+except Exception as e:
+    print(f"⚠️ No se pudo importar openai SDK: {e}")
+    _has_openai = False
+
+def _openai_client():
+    if not _has_openai:
+        raise RuntimeError("El paquete 'openai' no está instalado en el entorno.")
+    return OpenAI(api_key=OPENAI_API_KEY)
 
 # Cantidad de semanas disponibles en el piloto
 TOTAL_SEMANAS = 7
@@ -81,6 +101,56 @@ def texto_encabezado_semana(n_semana: int) -> str:
     return f"Semana {n_semana}: {rango}\nSeleccione la asignatura:"
 
 # ──────────────────────────────────────────────────────────────────────────────
+# GPT: Prompt del Tutor (neutro, cercano, Electromecánica Automotriz)
+# ──────────────────────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """
+Eres “Tutor de Electromecánica Automotriz” para estudiantes de Bachillerato Técnico.
+Objetivo: guiar, explicar y acompañar la comprensión y aplicación de contenidos del currículo oficial
+(diagnóstico, mantenimiento y reparación de sistemas eléctricos-electrónicos, motores de combustión interna,
+tren de rodaje y sistemas de seguridad/confort) con estándares de seguridad, ambientales y éticos.
+
+Estilo y tono:
+- Español neutro, claro, empático y motivador.
+- Cercano al estudiante, pero técnico cuando corresponda.
+- Explica con pasos, ejemplos y analogías concretas.
+- Prioriza la seguridad, el cuidado ambiental y el uso de manuales del fabricante.
+
+Estructura de respuesta (cuando aplique):
+1) Resumen rápido (qué es y para qué sirve).
+2) Conceptos clave (glosario corto y fórmulas si aplican).
+3) Procedimiento paso a paso (diagnóstico/mantenimiento/reparación).
+4) Instrumentos y valores de referencia (rangos típicos; si faltan datos, indica cómo obtenerlos).
+5) Verificaciones y criterios de aceptación.
+6) Errores frecuentes y cómo evitarlos.
+7) Seguridad, salud y ambiente (EPP, bloqueos, residuos).
+8) Qué seguir estudiando.
+
+Cobertura de contenidos (saberes a tu alcance):
+- Sistemas eléctricos y electrónicos: cableado y conectores; protección (fusibles, relés); arranque y carga (alternador y regulador);
+  iluminación y maniobra; tablero e indicadores; módulos de control y redes; sensores/actuadores; diagnóstico con multímetro/osciloscopio.
+- Motores de combustión interna: termodinámica y ciclos; admisión/escape; sobrealimentación (compresor/turbo/intercooler);
+  lubricación; refrigeración; verificación de parámetros y análisis de gases; mantenimiento y reparación.
+- Tren de rodaje: suspensión; dirección (incl. asistencias eléctricas/EPS); frenos (hidráulicos/neumáticos, tambor/disco, ABS);
+  transmisión de fuerza (manual, hidráulica, CVT; embrague, caja, diferencial; 4x2, 4x4).
+- Seguridad y confort: seguridad activa (ABS, control de tracción/estabilidad) y pasiva (airbags, cinturones, pretensores);
+  ventilación/calefacción; aire acondicionado; alarmas e inmovilizadores; audio/video/navegación; ergonomía.
+- Metalmecánica: metrología (vernier, micrómetro, reloj comparador); materiales; máquinas y herramientas; mecanizado;
+  manejo responsable de residuos.
+- Electricidad, electromagnetismo y electrónica: leyes de Ohm/Kirchhoff, potencia; CC y CA; electrónica analógica/digital
+  (diodos, transistores, tiristores, ICs, lógica booleana); sensores/transductores; medición; conversores de energía.
+- Dibujo técnico: normalización, vistas, cortes, acotación, tolerancias, estados de superficie.
+- Seguridad laboral y FCT: EPP, salud ocupacional, orden/limpieza, primeros auxilios, prácticas en taller/empresa.
+
+Seguridad y límites:
+- Nunca expliques cómo vulnerar sistemas antirrobo/inmovilizadores ni prácticas inseguras/ilegales.
+- Indica siempre EPP y procedimientos de bloqueo/etiquetado, y gestión de residuos.
+- Si faltan datos del modelo, solicita información del manual o propone valores de referencia con cautela.
+
+Formato breve para dudas rápidas:
+- “Definición”, “Cómo funciona”, “Síntomas típicos”, “Qué medir”, “Valores esperados”, “Qué reparar o ajustar”.
+"""
+
+# ──────────────────────────────────────────────────────────────────────────────
 # HELPERS DE UI
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -88,7 +158,6 @@ def hay_pdf_disponible(semana: int, asign_key: str) -> bool:
     """Devuelve True si existe un PDF para esa semana y asignatura (según tu lógica de sufijos/fallback)."""
     p = ruta_pdf(semana, asign_key)
     return bool(p) and p.exists()
-
 
 def etiqueta_grado_paralelo() -> str:
     return f"{GRADO}º {PARALELO}"
@@ -98,6 +167,7 @@ def kb_menu_principal() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📚 Fichas Pedagógicas", callback_data="fichas")],
         [InlineKeyboardButton("📢 Comunicados", callback_data="comunicados")],
         [InlineKeyboardButton("📝 Evaluaciones", callback_data="evaluaciones")],
+        [InlineKeyboardButton("🤖 Tutor Virtual", callback_data="tutor")],  # ── NUEVO
     ])
 
 def kb_semanas() -> InlineKeyboardMarkup:
@@ -120,9 +190,16 @@ def kb_asignaturas(semana: int) -> InlineKeyboardMarkup:
     filas.append([InlineKeyboardButton("🔙 Regresar a Selección de Semanas", callback_data="back:weeks")])
     return InlineKeyboardMarkup(filas)
 
-
 def kb_volver_asignaturas(semana: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Regresar a Asignaturas", callback_data=f"back:subjects:{semana}")]])
+
+# ── GPT: teclados del tutor
+def kb_tutor_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Hacer una consulta", callback_data="tutor:ask")],
+        [InlineKeyboardButton("🧹 Borrar contexto", callback_data="tutor:reset")],
+        [InlineKeyboardButton("🔙 Salir al Menú Principal", callback_data="tutor:exit")],
+    ])
 
 def leer_comunicados() -> str:
     if not RUTA_COMUNICADOS.exists():
@@ -154,6 +231,42 @@ def ruta_pdf(semana: int, asign_key: str) -> Path:
     return carpeta / base
 
 # ──────────────────────────────────────────────────────────────────────────────
+# GPT: Lógica de conversación
+# ──────────────────────────────────────────────────────────────────────────────
+async def ask_gpt(texto: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Envía la consulta a OpenAI usando el historial breve del usuario."""
+    # Historial por usuario (máx ~8 turnos para no crecer tokens)
+    hist = context.user_data.setdefault("tutor_history", [])
+    # Construimos mensajes (system + últimos turnos + usuario actual)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Limitar historial reciente
+    trimmed = hist[-8:] if len(hist) > 8 else hist
+    messages.extend(trimmed)
+    messages.append({"role": "user", "content": texto})
+
+    client = _openai_client()
+    # Llamada a OpenAI en hilo aparte para no bloquear
+    def _call():
+        return client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=900,
+        )
+    try:
+        resp = await asyncio.to_thread(_call)
+        content = resp.choices[0].message.content.strip()
+        # Actualizar historial
+        hist.append({"role": "user", "content": texto})
+        hist.append({"role": "assistant", "content": content})
+        # Evitar crecimiento infinito
+        if len(hist) > 20:
+            context.user_data["tutor_history"] = hist[-20:]
+        return content
+    except Exception as e:
+        return f"⚠️ Ocurrió un error consultando al Tutor: {e}"
+
+# ──────────────────────────────────────────────────────────────────────────────
 # HANDLERS
 # ──────────────────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -168,6 +281,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data in {"menu", "start", "back:main"}:
+        # Salir de modo tutor si estaba activo
+        context.user_data.pop("mode", None)
         await query.edit_message_text("👋 Menú principal:", reply_markup=kb_menu_principal()); return
 
     if data in {"fichas", "back:weeks"}:
@@ -214,6 +329,60 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       ))
         return
 
+    # ── GPT: entrada a Tutor Virtual
+    if data == "tutor":
+        context.user_data["mode"] = "tutor"
+        context.user_data.setdefault("tutor_history", [])
+        msg = (
+            "🤖 *Tutor Virtual activo.*\n\n"
+            "Escribe tu consulta como mensaje normal y te responderé.\n\n"
+            "Sugerencias:\n"
+            "• Ej.: “¿Cómo diagnostico el alternador si no carga?”\n"
+            "• Ej.: “Calcula el ancho de pista para 8 A en PCB FR-4.”\n\n"
+            "También puedes usar los botones:"
+        )
+        await query.edit_message_text(msg, reply_markup=kb_tutor_menu(), parse_mode="Markdown")
+        return
+
+    if data == "tutor:ask":
+        await query.edit_message_text(
+            "✍️ Escribe tu consulta para el Tutor Virtual en un *mensaje nuevo*.",
+            reply_markup=kb_tutor_menu(),
+            parse_mode="Markdown"
+        )
+        return
+
+    if data == "tutor:reset":
+        context.user_data["tutor_history"] = []
+        await query.edit_message_text("🧹 Contexto del Tutor borrado. ¡Listo para empezar de nuevo!",
+                                      reply_markup=kb_tutor_menu())
+        return
+
+    if data == "tutor:exit":
+        context.user_data.pop("mode", None)
+        await query.edit_message_text("Has salido del Tutor Virtual. 👋",
+                                      reply_markup=kb_menu_principal())
+        return
+
+# ── GPT: mensajes de texto dirigidos al tutor
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Solo interceptar si estamos en modo tutor
+    if context.user_data.get("mode") == "tutor":
+        if not OPENAI_API_KEY:
+            await update.message.reply_text("⚠️ El Tutor no está disponible: falta OPENAI_API_KEY en las variables de entorno.")
+            return
+        texto = (update.message.text or "").strip()
+        if not texto:
+            return
+        # Feedback inmediato opcional
+        await update.message.chat.send_action(action="typing")
+        respuesta = await ask_gpt(texto, context)
+        await update.message.reply_text(respuesta, disable_web_page_preview=True)
+    else:
+        # Si no estamos en modo tutor, puedes ignorar o responder algo genérico
+        # Aquí optamos por un recordatorio breve del menú:
+        await update.message.reply_text("Usa /start para ver el menú o toca “🤖 Tutor Virtual” para hacer consultas.")
+
 # ──────────────────────────────────────────────────────────────────────────────
 # EJECUCIÓN: webhook si hay URL, si no polling
 # ──────────────────────────────────────────────────────────────────────────────
@@ -221,10 +390,13 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(on_button))
+    # ── NUEVO: mensajes de texto para Tutor Virtual
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     # DEBUG opcional
     print(f"[DEBUG] WEBHOOK_URL env = {WEBHOOK_URL!r}")
     print(f"[DEBUG] PORT env = {PORT}")
+    print(f"[DEBUG] OPENAI_MODEL = {OPENAI_MODEL!r}")
 
     if WEBHOOK_URL:
         path = "webhook"                               # ruta explícita
