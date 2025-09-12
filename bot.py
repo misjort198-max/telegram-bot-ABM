@@ -1,26 +1,38 @@
 
-
 from pathlib import Path
 from datetime import date, timedelta
 import os
-import asyncio  # ── NUEVO: para correr la llamada a OpenAI sin bloquear
+import sys
+import asyncio
+import datetime
+
+# Telegram
+import telegram
 from telegram.request import HTTPXRequest
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    ContextTypes, MessageHandler, filters
+)
+
+# Boot logs (útiles en Render)
+print("[BOOT] Python:", sys.version)
+print("[BOOT] PTB version:", getattr(telegram, "__version__", "unknown"))
+print("[BOOT] UTC:", datetime.datetime.utcnow().isoformat(), "UTC")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DESDE VARIABLES DE ENTORNO
 # ──────────────────────────────────────────────────────────────────────────────
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # se define después del 1er deploy
-PORT = int(os.getenv("PORT", "10000"))  # Render usa un puerto dinámico
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # si está vacío → modo polling
+PORT = int(os.getenv("PORT", "10000"))
 
 if not TOKEN:
     raise RuntimeError("Falta BOT_TOKEN en variables de entorno.")
 
 # ── GPT: Configuración de OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # puedes subir a gpt-4.1 si deseas
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # cambia a gpt-4.1 si necesitas más capacidad
 if not OPENAI_API_KEY:
     print("⚠️ Advertencia: Falta OPENAI_API_KEY. El modo Tutor no funcionará hasta que lo configures.")
 
@@ -29,30 +41,29 @@ try:
     from openai import OpenAI
     _has_openai = True
 except Exception as e:
-    print(f"⚠️ No se pudo importar openai SDK: {e}")
+    print(f"⚠️ No se pudo importar openai SDK: {e!r}")
     _has_openai = False
 
 def _openai_client():
     if not _has_openai:
         raise RuntimeError("El paquete 'openai' no está instalado en el entorno.")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("Falta OPENAI_API_KEY en variables de entorno.")
     return OpenAI(api_key=OPENAI_API_KEY)
 
-# Cantidad de semanas disponibles en el piloto
+# ──────────────────────────────────────────────────────────────────────────────
+# PILOTO DE FICHAS (tus valores)
+# ──────────────────────────────────────────────────────────────────────────────
 TOTAL_SEMANAS = 7
-
-# Semana 1: lunes 28 de julio de 2025
 SEMANA1_INICIO = date(2025, 7, 28)
 
-# Raíz de fichas (carpeta junto a este bot.py)
 ROOT_DIR = Path(__file__).parent
 RUTA_FICHAS = ROOT_DIR / "fichas_pedagogicas"
 
-# Identidad del curso para sufijo de archivos
 GRADO = 2
 PARALELO = "B"
 USAR_SUFIJO = True
 
-# Mapa de asignaturas
 ASIGNATURAS = {
     "electricidad": "Electricidad, Electromagnetismo y Electrónica",
     "tren": "Tren de Rodaje",
@@ -60,7 +71,6 @@ ASIGNATURAS = {
     "motores": "Motores de Combustión Interna",
 }
 
-# Nombres base (sin sufijo) esperados en cada semana
 ARCHIVOS_BASE = {
     "electricidad": "electricidad_electromagnetismo.pdf",
     "tren": "tren_de_rodaje.pdf",
@@ -68,12 +78,10 @@ ARCHIVOS_BASE = {
     "motores": "motores_combustion_interna.pdf",
 }
 
-# Ruta del archivo de comunicados
 RUTA_COMUNICADOS = ROOT_DIR / "comunicados.txt"
 
-# Meses
 MESES_ES = {1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",7:"Julio",8:"Agosto",9:"Septiembre",10:"Octubre",11:"Noviembre",12:"Diciembre"}
-MESES_ABR = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+MESES_ABR = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Dic"}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FECHAS POR SEMANA
@@ -154,9 +162,7 @@ Formato breve para dudas rápidas:
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPERS DE UI
 # ──────────────────────────────────────────────────────────────────────────────
-
 def hay_pdf_disponible(semana: int, asign_key: str) -> bool:
-    """Devuelve True si existe un PDF para esa semana y asignatura (según tu lógica de sufijos/fallback)."""
     p = ruta_pdf(semana, asign_key)
     return bool(p) and p.exists()
 
@@ -168,7 +174,7 @@ def kb_menu_principal() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📚 Fichas Pedagógicas", callback_data="fichas")],
         [InlineKeyboardButton("📢 Comunicados", callback_data="comunicados")],
         [InlineKeyboardButton("📝 Evaluaciones", callback_data="evaluaciones")],
-        [InlineKeyboardButton("🤖 Tutor Virtual", callback_data="tutor")],  # ── NUEVO
+        [InlineKeyboardButton("🤖 Tutor Virtual", callback_data="tutor")],
     ])
 
 def kb_semanas() -> InlineKeyboardMarkup:
@@ -181,20 +187,16 @@ def kb_semanas() -> InlineKeyboardMarkup:
 
 def kb_asignaturas(semana: int) -> InlineKeyboardMarkup:
     filas = []
-    # Orden visible deseado:
     orden = ["electricidad", "tren", "sistemas", "motores"]
     for key in orden:
         if hay_pdf_disponible(semana, key):
             filas.append([InlineKeyboardButton(ASIGNATURAS[key], callback_data=f"ficha:{semana}:{key}")])
-
-    # Siempre agrega la opción para volver
     filas.append([InlineKeyboardButton("🔙 Regresar a Selección de Semanas", callback_data="back:weeks")])
     return InlineKeyboardMarkup(filas)
 
 def kb_volver_asignaturas(semana: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Regresar a Asignaturas", callback_data=f"back:subjects:{semana}")]])
 
-# ── GPT: teclados del tutor
 def kb_tutor_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💬 Hacer una consulta", callback_data="tutor:ask")],
@@ -213,54 +215,41 @@ def ruta_pdf(semana: int, asign_key: str) -> Path:
     base = ARCHIVOS_BASE.get(asign_key)
     if not base:
         return Path("")
-
-    # Si usas sufijo, probamos varias variantes (S/s y B/b) para Linux (case-sensitive)
     if USAR_SUFIJO:
         base_sin_ext = base[:-4] if base.lower().endswith(".pdf") else base
-
         candidatos = []
         for letra in (PARALELO, PARALELO.upper(), PARALELO.lower()):
             candidatos.append(f"{base_sin_ext}_{GRADO}{letra}_S{semana}.pdf")
             candidatos.append(f"{base_sin_ext}_{GRADO}{letra}_s{semana}.pdf")
-
         for nombre in candidatos:
             ruta = carpeta / nombre
             if ruta.exists():
                 return ruta
-
-    # fallback al nombre base sin sufijo
     return carpeta / base
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GPT: Lógica de conversación
+# GPT: Lógica
 # ──────────────────────────────────────────────────────────────────────────────
 async def ask_gpt(texto: str, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Envía la consulta a OpenAI usando el historial breve del usuario."""
-    # Historial por usuario (máx ~8 turnos para no crecer tokens)
     hist = context.user_data.setdefault("tutor_history", [])
-    # Construimos mensajes (system + últimos turnos + usuario actual)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    # Limitar historial reciente
     trimmed = hist[-8:] if len(hist) > 8 else hist
     messages.extend(trimmed)
     messages.append({"role": "user", "content": texto})
 
-    client = _openai_client()
-    # Llamada a OpenAI en hilo aparte para no bloquear
-    def _call():
-        return client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=900,
-        )
     try:
+        client = _openai_client()
+        def _call():
+            return client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                temperature=0.25,
+                max_tokens=900,
+            )
         resp = await asyncio.to_thread(_call)
         content = resp.choices[0].message.content.strip()
-        # Actualizar historial
         hist.append({"role": "user", "content": texto})
         hist.append({"role": "assistant", "content": content})
-        # Evitar crecimiento infinito
         if len(hist) > 20:
             context.user_data["tutor_history"] = hist[-20:]
         return content
@@ -276,6 +265,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb_menu_principal()
     )
 
+async def tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Acceso directo con /tutor."""
+    context.user_data["mode"] = "tutor"
+    context.user_data.setdefault("tutor_history", [])
+    msg = (
+        "🤖 *Tutor Virtual activo.*\n\n"
+        "Escribe tu consulta como mensaje normal y te responderé.\n\n"
+        "Sugerencias:\n"
+        "• “¿Cómo diagnostico el alternador si no carga?”\n"
+        "• “Calcula el ancho de pista para 8 A en PCB FR-4.”\n\n"
+        "También puedes usar los botones:"
+    )
+    await update.message.reply_text(msg, reply_markup=kb_tutor_menu(), parse_mode="Markdown")
+
 async def on_error(update, context):
     print("ERROR:", repr(context.error))
 
@@ -285,7 +288,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data in {"menu", "start", "back:main"}:
-        # Salir de modo tutor si estaba activo
         context.user_data.pop("mode", None)
         await query.edit_message_text("👋 Menú principal:", reply_markup=kb_menu_principal()); return
 
@@ -333,7 +335,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       ))
         return
 
-    # ── GPT: entrada a Tutor Virtual
     if data == "tutor":
         context.user_data["mode"] = "tutor"
         context.user_data.setdefault("tutor_history", [])
@@ -341,8 +342,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 *Tutor Virtual activo.*\n\n"
             "Escribe tu consulta como mensaje normal y te responderé.\n\n"
             "Sugerencias:\n"
-            "• Ej.: “¿Cómo diagnostico el alternador si no carga?”\n"
-            "• Ej.: “Calcula el ancho de pista para 8 A en PCB FR-4.”\n\n"
+            "• “¿Cómo diagnostico el alternador si no carga?”\n"
+            "• “Calcula el ancho de pista para 8 A en PCB FR-4.”\n\n"
             "También puedes usar los botones:"
         )
         await query.edit_message_text(msg, reply_markup=kb_tutor_menu(), parse_mode="Markdown")
@@ -368,9 +369,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       reply_markup=kb_menu_principal())
         return
 
-# ── GPT: mensajes de texto dirigidos al tutor
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Solo interceptar si estamos en modo tutor
     if context.user_data.get("mode") == "tutor":
         if not OPENAI_API_KEY:
             await update.message.reply_text("⚠️ El Tutor no está disponible: falta OPENAI_API_KEY en las variables de entorno.")
@@ -378,51 +377,62 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto = (update.message.text or "").strip()
         if not texto:
             return
-        # Feedback inmediato opcional
-        await update.message.chat.send_action(action="typing")
+        try:
+            await update.message.chat.send_action(action="typing")
+        except Exception:
+            pass
         respuesta = await ask_gpt(texto, context)
         await update.message.reply_text(respuesta, disable_web_page_preview=True)
     else:
-        # Si no estamos en modo tutor, puedes ignorar o responder algo genérico
-        # Aquí optamos por un recordatorio breve del menú:
         await update.message.reply_text("Usa /start para ver el menú o toca “🤖 Tutor Virtual” para hacer consultas.")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# EJECUCIÓN: webhook si hay URL, si no polling
+# EJECUCIÓN
 # ──────────────────────────────────────────────────────────────────────────────
 def main():
-    # app = Application.builder().token(TOKEN).build()
-    request = HTTPXRequest(
-    connect_timeout=20.0,    # conexión a la API de Telegram
-    read_timeout=60.0,       # esperar lectura de respuesta
-    write_timeout=60.0       # tiempo para enviar el request
-    )
-    app = Application.builder().token(TOKEN).request(request).build()
-    app.add_error_handler(on_error)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(on_button))
-    # ── NUEVO: mensajes de texto para Tutor Virtual
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-
-    # DEBUG opcional
-    print(f"[DEBUG] WEBHOOK_URL env = {WEBHOOK_URL!r}")
-    print(f"[DEBUG] PORT env = {PORT}")
-    print(f"[DEBUG] OPENAI_MODEL = {OPENAI_MODEL!r}")
-
-    if WEBHOOK_URL:
-        path = "webhook"                               # ruta explícita
-        full_webhook = f"{WEBHOOK_URL.rstrip('/')}/{path}"
-        print(f"🌐 Iniciando en modo WEBHOOK en {full_webhook} (puerto {PORT})")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=path,
-            webhook_url=full_webhook,
-            drop_pending_updates=True
+    try:
+        request = HTTPXRequest(
+            connect_timeout=20.0,
+            read_timeout=60.0,
+            write_timeout=60.0
         )
-    else:
-        print("📡 Iniciando en modo POLLING...")
-        app.run_polling(drop_pending_updates=True)
+        app = Application.builder().token(TOKEN).request(request).build()
+
+        # Handlers
+        app.add_error_handler(on_error)
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("tutor", tutor_cmd))  # acceso directo
+        app.add_handler(CallbackQueryHandler(on_button))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+
+        # Debug
+        print(f"[DEBUG] WEBHOOK_URL env = {WEBHOOK_URL!r}")
+        print(f"[DEBUG] PORT env = {PORT}")
+        print(f"[DEBUG] OPENAI_MODEL = {OPENAI_MODEL!r}")
+
+        if WEBHOOK_URL:
+            # WEBHOOK
+            path = "webhook"
+            full_webhook = f"{WEBHOOK_URL.rstrip('/')}/{path}"
+            print(f"🌐 Iniciando en modo WEBHOOK en {full_webhook} (puerto {PORT})")
+            app.run_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                url_path=path,
+                webhook_url=full_webhook,
+                drop_pending_updates=True
+            )
+        else:
+            # POLLING
+            print("📡 Iniciando en modo POLLING...")
+            app.run_polling(drop_pending_updates=True)
+
+    except Exception as e:
+        import traceback, time
+        print("[FATAL] El proceso se cayó en main():", repr(e))
+        traceback.print_exc()
+        # pequeña espera para alcanzar a leer logs en Render si crashea
+        time.sleep(10)
 
 if __name__ == "__main__":
     main()
