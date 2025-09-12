@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import date, timedelta
 import os
 import asyncio  # ── NUEVO: para correr la llamada a OpenAI sin bloquear
+from telegram.request import HTTPXRequest
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
@@ -275,6 +276,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb_menu_principal()
     )
 
+async def on_error(update, context):
+    print("ERROR:", repr(context.error))
+
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -387,7 +391,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # EJECUCIÓN: webhook si hay URL, si no polling
 # ──────────────────────────────────────────────────────────────────────────────
 def main():
-    app = Application.builder().token(TOKEN).build()
+    # app = Application.builder().token(TOKEN).build()
+    request = HTTPXRequest(
+    connect_timeout=20.0,    # conexión a la API de Telegram
+    read_timeout=60.0,       # esperar lectura de respuesta
+    write_timeout=60.0       # tiempo para enviar el request
+    )
+    app = Application.builder().token(TOKEN).request(request).build()
+    app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(on_button))
     # ── NUEVO: mensajes de texto para Tutor Virtual
