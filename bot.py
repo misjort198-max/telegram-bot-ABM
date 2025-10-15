@@ -6,6 +6,7 @@ import sys
 import asyncio
 import datetime
 
+
 # Telegram
 import telegram
 from telegram.request import HTTPXRequest
@@ -54,7 +55,7 @@ def _openai_client():
 # ──────────────────────────────────────────────────────────────────────────────
 # PILOTO DE FICHAS (tus valores)
 # ──────────────────────────────────────────────────────────────────────────────
-TOTAL_SEMANAS = 7
+TOTAL_SEMANAS = 11
 SEMANA1_INICIO = date(2025, 7, 28)
 
 ROOT_DIR = Path(__file__).parent
